@@ -105,3 +105,23 @@ uptime:
  li a7, SYS_uptime
  ecall
  ret
+.global getppid
+getppid:
+ li a7, SYS_getppid
+ ecall
+ ret
+.global yield
+yield:
+ li a7, SYS_yield
+ ecall
+ ret
+.global getpa
+getpa:
+ li a7, SYS_getpa
+ ecall
+ ret
+.global forkf
+forkf:
+ li a7, SYS_forkf
+ ecall
+ ret

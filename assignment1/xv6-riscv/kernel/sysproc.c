@@ -24,6 +24,46 @@ sys_getpid(void)
 }
 
 uint64
+sys_getppid(void)
+{
+  if(myproc()->parent){
+    return myproc()->parent->pid;
+  }
+  return -1;
+}
+
+uint64
+sys_yield(void)
+{
+  yield();
+  return 0;
+}
+
+uint64
+sys_getpa(void){
+  uint64 A;
+  if(argaddr(0, &A) < 0){
+    // printf("%p\n", &p);
+    return -1;
+  }
+  // printf("%p %p\n", (void*)A, (void*)(uint64)(walkaddr(myproc()->pagetable, A) + ((A) & (uint64)(PGSIZE-1))));
+  return (uint64)(walkaddr(myproc()->pagetable, A) + ((A) & (uint64)(PGSIZE-1)));
+}
+
+
+uint64
+sys_forkf(void)
+{
+  uint64 p;
+  if(argaddr(0, &p) < 0){
+    // printf("%p\n", &p);
+    return -1;
+  }
+  // printf("%d\n", p);
+  return forkf(p);
+}
+
+uint64
 sys_fork(void)
 {
   return fork();
