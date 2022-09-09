@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "procstat.h"
 
 struct cpu cpus[NCPU];
 
@@ -105,7 +106,7 @@ static struct proc*
 allocproc(void)
 {
   struct proc *p;
-
+  
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == UNUSED) {
@@ -140,6 +141,13 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  acquire(&tickslock);
+  p->ctime = ticks;
+  release(&tickslock);
+
+  p->stime=-1;
+  p->etime=0;
 
   return p;
 }
@@ -411,6 +419,10 @@ exit(int status)
   end_op();
   p->cwd = 0;
 
+  acquire(&tickslock);
+  p->etime = ticks-p->stime;
+  release(&tickslock);
+
   acquire(&wait_lock);
 
   // Give any children to init.
@@ -425,6 +437,8 @@ exit(int status)
   p->state = ZOMBIE;
 
   release(&wait_lock);
+
+
 
   // Jump into the scheduler, never to return.
   sched();
@@ -480,6 +494,57 @@ wait(uint64 addr)
   }
 }
 
+
+// Wait for a child process to exit and return its pid.
+// Return -1 if this process has no children.
+int
+waitpid(int id, uint64 addr)
+{
+  struct proc *np;
+  int havekids, pid;
+  struct proc *p = myproc();
+
+  acquire(&wait_lock);
+
+  for(;;){
+    // Scan through table looking for exited children.
+    havekids = 0;
+    for(np = proc; np < &proc[NPROC]; np++){
+      if(np->parent == p && np->pid==id){
+        // make sure the child isn't still in exit() or swtch().
+        acquire(&np->lock);
+
+        havekids = 1;
+        if(np->state == ZOMBIE){
+          // Found one.
+          pid = np->pid;
+          if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
+                                  sizeof(np->xstate)) < 0) {
+            release(&np->lock);
+            release(&wait_lock);
+            return -1;
+          }
+          freeproc(np);
+          release(&np->lock);
+          release(&wait_lock);
+          return pid;
+        }
+        release(&np->lock);
+      }
+    }
+
+    // No point waiting if we don't have any children.
+    if(!havekids || p->killed){
+      release(&wait_lock);
+      return -1;
+    }
+    
+    // Wait for a child to exit.
+    sleep(p, &wait_lock);  //DOC: wait-sleep
+  }
+}
+
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -494,16 +559,25 @@ scheduler(void)
   struct cpu *c = mycpu();
   
   c->proc = 0;
+
+  
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-
+    
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
+        acquire(&tickslock);
+        if(p->stime==-1){
+          // acquire(&wait_lock);
+          p->stime = ticks;
+          // release(&wait_lock);
+        }
+        release(&tickslock);
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
@@ -540,8 +614,10 @@ sched(void)
     panic("sched interruptible");
 
   intena = mycpu()->intena;
+
   swtch(&p->context, &mycpu()->context);
   mycpu()->intena = intena;
+
 }
 
 // Give up the CPU for one scheduling round.
@@ -706,4 +782,129 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// Print a process listing to console.  For debugging.
+// Runs when user types ^P on console.
+// No lock to avoid wedging a stuck machine further.
+int
+ps(void)
+{
+  static char *states[] = {
+  [UNUSED]    "unused",
+  [USED]      "created",
+  [SLEEPING]  "sleep ",
+  [RUNNABLE]  "runble",
+  [RUNNING]   "run   ",
+  [ZOMBIE]    "zombie",
+  };
+  struct proc *p;
+  char *state;
+
+  // printf("\n");
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->state == UNUSED)
+    {
+      release(&p->lock);
+      continue;
+    }
+    if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
+    {
+      state = states[p->state];
+      if(p->state != ZOMBIE && p->state != RUNNABLE && p->state != USED){
+        acquire(&tickslock);
+        p->etime = ticks-p->stime;
+        release(&tickslock);
+      }
+    }
+    else{
+      state = "???";
+    }
+
+    release(&p->lock);
+    
+    int ppid;
+    int pid;
+    acquire(&p->lock);
+    pid=p->pid;
+    release(&p->lock);
+    
+    if(pid==1)
+    ppid=-1;
+    else{
+      acquire(&wait_lock);
+      ppid=p->parent->pid;
+      release(&wait_lock);    
+    }
+
+    printf("pid=%d, ppid=%d, state=%s, cmd=%s, ctime=%d, stime=%d, etime=%d, size=%p\n", pid, ppid, state, p->name, p->ctime, p->stime, p->etime, (void*)p->sz);
+  }
+  return 0;
+}
+
+
+// Print a process listing to console.  For debugging.
+// Runs when user types ^P on console.
+// No lock to avoid wedging a stuck machine further.
+int
+pinfo(int pid, uint64 q)
+{
+  static char *states[] = {
+  [UNUSED]    "unused",
+  [USED]      "created",
+  [SLEEPING]  "sleep ",
+  [RUNNABLE]  "runble",
+  [RUNNING]   "run   ",
+  [ZOMBIE]    "zombie",
+  };
+  struct proc *p;
+  
+  struct procstat *prst;
+  struct proc *np=myproc();
+  
+  prst=(struct procstat *)(void*)q;
+  char *state;
+  
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid != pid)
+    {
+      release(&p->lock);
+      continue;
+    }
+    if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
+    {
+      
+      state = states[p->state];
+      if(p->state != ZOMBIE && p->state != RUNNABLE && p->state != USED){
+        acquire(&tickslock);
+        p->etime = ticks-p->stime;
+        release(&tickslock);
+      }
+    }
+    else{
+      state = "???";
+    }
+    
+    release(&p->lock);
+    
+    if(copyout(np->pagetable, (uint64)&prst->pid, (char *)&pid, sizeof(pid))<0)return -1;
+    
+    if(pid==1)
+    prst->ppid=-1;
+    else{
+      acquire(&wait_lock);
+      copyout(np->pagetable, (uint64)&prst->ppid, (char *)&p->parent->pid, sizeof(p->parent->pid));
+      release(&wait_lock);    
+    }
+    if(copyout(np->pagetable, (uint64)prst->state, state, sizeof(state))<0)return -1;
+    if(copyout(np->pagetable, (uint64)&prst->ctime, (char *)&p->ctime, sizeof(p->ctime))<0)return -1;
+    if(copyout(np->pagetable, (uint64)&prst->stime, (char *)&p->stime, sizeof(p->stime))<0)return -1;
+    if(copyout(np->pagetable, (uint64)&prst->etime, (char *)&p->etime, sizeof(p->etime))<0)return -1;
+    if(copyout(np->pagetable, (uint64)&prst->size, (char *)&p->sz, sizeof(p->sz))<0)return -1;
+    if(copyout(np->pagetable, (uint64)prst->command, p->name, sizeof(p->name))<0)return -1;
+    return 0;
+  }
+  return -1;
 }

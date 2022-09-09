@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "procstat.h"
 
 uint64
 sys_exit(void)
@@ -50,6 +51,11 @@ sys_getpa(void){
   return (uint64)(walkaddr(myproc()->pagetable, A) + ((A) & (uint64)(PGSIZE-1)));
 }
 
+uint64
+sys_fork(void)
+{
+  return fork();
+}
 
 uint64
 sys_forkf(void)
@@ -64,18 +70,30 @@ sys_forkf(void)
 }
 
 uint64
-sys_fork(void)
-{
-  return fork();
-}
-
-uint64
 sys_wait(void)
 {
   uint64 p;
   if(argaddr(0, &p) < 0)
     return -1;
   return wait(p);
+}
+
+uint64
+sys_waitpid(void)
+{
+  uint64 p;
+  int id;
+  if(argint(0, &id) < 0){
+    return -1;
+  }
+  if(argaddr(1, &p) < 0)
+    return -1;
+  if(id>=0)
+    return waitpid(id, p);
+  if(id==-1)
+    return wait(p);
+  else
+    return -1;
 }
 
 uint64
@@ -134,4 +152,26 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_ps(void)
+{
+  return ps();
+}
+
+uint64
+sys_pinfo(void)
+{
+  int pid; uint64 p;
+  if(argint(0, &pid) < 0){
+    return -1;
+  }
+  if(argaddr(1, &p) < 0){
+    return -1;
+  }
+  if(pid==-1)
+    return pinfo(myproc()->pid, p);
+  else
+    return pinfo(pid, p);
 }
