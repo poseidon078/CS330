@@ -868,7 +868,7 @@ pinfo(int pid, uint64 q)
   
   for(p = proc; p < &proc[NPROC]; p++){
     acquire(&p->lock);
-    if(p->pid != pid)
+    if(!p->pid || p->pid != pid)
     {
       release(&p->lock);
       continue;

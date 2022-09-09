@@ -7,6 +7,7 @@ main(void)
 {
   struct procstat pstat;
   int x = fork();
+ 
   if (x < 0) {
      fprintf(2, "Error: cannot fork\nAborting...\n");
      exit(0);
@@ -24,7 +25,7 @@ main(void)
   }
   else {
      fprintf(1, "%d: Child.\n", getpid());
-     if (pinfo(50, (void*)0) < 0) fprintf(1, "Cannot get pinfo\n");
+     if (pinfo(-1, &pstat) < 0) fprintf(1, "Cannot get pinfo\n");
      else fprintf(1, "pid=%d, ppid=%d, state=%s, cmd=%s, ctime=%d, stime=%d, etime=%d, size=%p\n\n",
          pstat.pid, pstat.ppid, pstat.state, pstat.command, pstat.ctime, pstat.stime, pstat.etime, pstat.size);
   }
